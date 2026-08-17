@@ -1,0 +1,17 @@
+{
+  "dataset": "knowledge_qa_10",
+  "description": "A fixed, small factual question-answer set for generated-knowledge prompting smoke tests.",
+  "source": "Curated factual knowledge questions; each answer was checked for an unambiguous canonical form.",
+  "samples": [
+    {"id": "knowledge-qa-001", "question": "What is the capital city of Australia?", "answer": "Canberra"},
+    {"id": "knowledge-qa-002", "question": "Which element has the chemical symbol Au?", "answer": "gold"},
+    {"id": "knowledge-qa-003", "question": "Who wrote the novel Pride and Prejudice?", "answer": "Jane Austen"},
+    {"id": "knowledge-qa-004", "question": "Which planet is the largest in the Solar System?", "answer": "Jupiter"},
+    {"id": "knowledge-qa-005", "question": "Which country is home to the ancient city of Petra?", "answer": "Jordan"},
+    {"id": "knowledge-qa-006", "question": "Who painted The Starry Night?", "answer": "Vincent van Gogh", "aliases": ["Vincent Van Gogh", "van Gogh"]},
+    {"id": "knowledge-qa-007", "question": "What instrument is used to measure atmospheric pressure?", "answer": "barometer"},
+    {"id": "knowledge-qa-008", "question": "Which treaty formally ended World War I?", "answer": "Treaty of Versailles", "aliases": ["the Treaty of Versailles"]},
+    {"id": "knowledge-qa-009", "question": "Which scientist proposed the three laws of motion?", "answer": "Isaac Newton", "aliases": ["Newton"]},
+    {"id": "knowledge-qa-010", "question": "What is the largest organ in the human body?", "answer": "skin", "aliases": ["the skin"]}
+  ]
+}
