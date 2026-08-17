@@ -1,173 +1,569 @@
-# prompt-engineer
+# 提示词工程技术：写给小白的完整入门指南
 
-提示词技术的可复现实验项目。多数数值推理实验统一使用已下载的 `openai/gsm8k` `main/test` 前 100 条：`code/data/gsm8k_test_100.raw.json`；共享加载器位于 `code/gsm8k.py`。生成知识提示实验单独使用 10 条事实知识问答样本。
+> 本文用尽量直白的语言解释 [Prompt Engineering Guide 的“提示技术”目录](https://www.promptingguide.ai/zh/techniques)中列出的技术。文中的“模型”指大语言模型（LLM）。仓库中有实现或实验的技术，会给出对应代码、复现命令和结果分析。
 
-## 配置
+## 先说结论：提示词工程到底是什么？
 
-项目根目录的 `.env` 需要包含：
+大语言模型很像一个读过很多资料、但不知道你此刻具体想要什么的临时助手。提示词工程，就是把任务、背景、例子、限制和输出格式组织清楚，让这个助手更稳定地完成任务。
 
-```dotenv
-LLM_MODEL=你的模型名
-LLM_BASE_URL=OpenAI兼容接口地址
-LLM_API_KEY=你的密钥
+它不是“找到一句神奇咒语”。真正可靠的做法通常是：
+
+1. 先明确任务和评分标准；
+2. 写一个最简单的提示作为基线；
+3. 只改变一个因素做对照实验；
+4. 在足够多、足够有代表性的样本上比较正确率、成本和速度；
+5. 根据失败案例继续修改。
+
+一个常见提示词可以包含四部分：
+
+```text
+任务：你要模型做什么
+背景：完成任务需要知道什么
+输入：这一次要处理的数据
+输出要求：格式、长度、语气、允许或禁止的内容
 ```
 
-`LLM_BASE_URL` 可省略，此时使用 OpenAI 默认地址。密钥不要提交到版本控制。
+例如：
 
-## ReAct 框架
-
-该实现参考 Prompt Engineering Guide 的 [ReAct 框架](https://www.promptingguide.ai/zh/techniques/react)：模型每轮先输出 `Thought N` 和 `Action N`，程序执行 `Search` 或安全的 `Calculator`，再将返回值作为 `Observation N` 拼接进下一轮提示；模型输出 `Finish[答案]` 时结束。这样推理决定下一次工具调用，工具观察又约束后续推理。
-
-```bash
-# 只预览首轮 ReAct 提示词（不调用模型）
-uv run python -m code.react_prompting.experiment --dry-run
-
-# 使用配置的模型运行；会打印完整 Thought / Action / Observation 轨迹
-uv run python -m code.react_prompting.experiment --question "高平原的海拔范围是多少？"
+```text
+任务：判断用户评论的情感。
+标签只能是：正面、负面、中性。
+评论：我觉得这次旅行还可以。
+只输出一个标签，不要解释。
 ```
 
-搜索工具默认使用可替换的本地知识库，便于复现和离线测试；实际接入搜索 API 时，只需将 `ReActAgent(..., tools={"search": your_search})` 传入返回字符串的搜索函数。计算器使用 AST 白名单解析，只允许基本算术表达式。
+## 技术全景图
 
-## 自我反思（Reflexion）
+| 技术 | 大白话类比 | 主要解决什么问题 | 本仓库状态 |
+| --- | --- | --- | --- |
+| 零样本提示 | 直接交代工作 | 简单、常见任务 | 作为多个实验的基线 |
+| 少样本提示 | 先给几道例题 | 让模型模仿格式和规律 | 有代码、有结果 |
+| 思维链（CoT） | 要求写步骤 | 多步推理 | 有代码、有结果 |
+| 自我一致性 | 多做几遍再投票 | 降低一次推理的偶然性 | 有代码、有结果 |
+| 生成知识提示 | 先回忆知识再答题 | 常识和知识型任务 | 有代码、暂无结果 |
+| 链式提示 | 流水线分工 | 复杂任务拆解 | 理论介绍 |
+| 思维树（ToT） | 同时试几条路，走不通就回退 | 搜索和规划问题 | 有代码、有结果 |
+| RAG | 先查资料再回答 | 私有、最新和可溯源知识 | 理论介绍 |
+| ART | 自动挑工具并编排步骤 | 未见过的多步工具任务 | 理论介绍 |
+| APE | 让模型帮忙写并筛选提示词 | 自动优化提示词 | 有代码、有结果 |
+| Active-Prompt | 把最难的题交给人标注 | 节省人工示例成本 | 有代码、暂无结果 |
+| 方向性刺激提示 | 给模型一张重点便签 | 控制摘要关注点 | 理论介绍 |
+| PAL | 模型列程序，解释器计算 | 精确计算和符号操作 | 理论介绍 |
+| ReAct | 边想、边查、边修正 | 需要外部工具的任务 | 有代码、暂无结果 |
+| Reflexion | 失败后写复盘，下次参考 | 多轮试错型任务 | 有代码、暂无结果 |
+| 多模态 CoT | 看图并分步推理 | 图文结合的问题 | 理论介绍 |
+| GraphPrompts | 把关系网也交给模型 | 图结构数据任务 | 理论介绍 |
+| Meta-Prompting | 规定解题框架而非具体答案 | 可复用的结构化推理 | 理论介绍 |
 
-该实现参考 Prompt Engineering Guide 的 [Reflexion](https://www.promptingguide.ai/zh/techniques/reflexion)：`Actor` 生成一次答案，`Evaluator` 为该次轨迹给出奖励和反馈；失败后，`Self-Reflection` 将轨迹、奖励及既有记忆转为一条具体的语言建议。该建议保存在固定容量的滑动窗口中，作为下一次 Actor 的上下文。因此它不需要微调模型，也能从试错中迭代改进。
+---
 
-```bash
-# 只预览首轮 Actor 提示词
-uv run python -m code.reflexion_prompting.experiment --dry-run
+## 1. 零样本提示（Zero-shot Prompting）
 
-# 用默认的年龄题运行（精确答案 Evaluator）
-uv run python -m code.reflexion_prompting.experiment
+### 原理
 
-# 替换任务、标准答案和试错次数
-uv run python -m code.reflexion_prompting.experiment --task "7 * 8 等于多少？" --expected-answer 56 --max-trials 4
+“零样本”就是不给示例，只用一句或几句指令让模型直接做事。模型在训练中已经见过大量语言和任务形式，因此很多常见任务不需要现场教学也能完成。
+
+### 有什么用？
+
+它适合情感分类、改写、摘要、信息提取、翻译等模型熟悉的任务，也是所有实验最值得先做的低成本基线。如果零样本已经足够好，就没有必要增加很长的例子或复杂流程。
+
+### 最小模板
+
+```text
+把下面评论分为“正面”“负面”或“中性”。
+评论：我觉得这次假期还可以。
+只输出标签。
 ```
 
-`ReflexionAgent` 的 `evaluator` 可替换为单元测试、规则检查或 LLM 评审函数；Actor 和 Self-Reflection 调用器同样可注入，因而完整循环可离线测试。
+### 局限
 
-## 少样本提示消融实验
+任务含义模糊、领域特殊、输出格式严格或需要多步推理时，模型可能误解要求。这时可逐步尝试少样本、CoT、工具或检索，而不是一开始就堆叠所有技术。
 
-实验参考 Prompt Engineering Guide 的[少样本提示说明](https://www.promptingguide.ai/zh/techniques/fewshot)：在同一组中文情感分类文本上，对比不含演示的零样本基线与包含 4 个正负面演示的少样本处理组。
+参考：[零样本提示](https://www.promptingguide.ai/zh/techniques/zeroshot)
 
-先预览零样本与少样本提示（不调用模型）：
+## 2. 少样本提示（Few-shot Prompting）
 
-```bash
-uv run python -m code.few_shot_prompting.experiment --dry-run
+### 原理
+
+少样本提示是在正式问题前放几组“输入 → 输出”示例。模型不会因此更新内部参数，而是在当前上下文里临时模仿例子的任务规律、标签含义和输出格式，这叫“上下文学习”。一个示例叫 1-shot，四个示例叫 4-shot。
+
+### 有什么用？
+
+它特别适合：
+
+- 标签名称很特别，例如公司自定义的 `PAYMENT`、`ACCESS`；
+- 输出格式要求严格；
+- 用户很难只靠文字说明风格，却很容易给出范例；
+- 零样本经常误解任务，但任务本身不需要很长推理。
+
+### 最小模板
+
+```text
+文本：这家餐厅的服务很周到，菜品也比预想中更美味。
+标签：正面
+
+文本：耳机用了两天就没有声音，售后还一直推诿。
+标签：负面
+
+文本：客服很耐心，几分钟就帮我解决了登录问题。
+标签：
 ```
 
-运行完整实验：
+示例要尽量正确、清晰、多样，并与真实输入相似。错误示例、偏科示例或冲突格式会把模型带偏。
+
+### 仓库实现与实验结果
+
+实现见 [`code/few_shot_prompting/experiment.py`](code/few_shot_prompting/experiment.py)。实验使用 10 条独立中文文本（正负面各 5 条）比较零样本和 4-shot；少样本演示另外编写，不与测试集重叠。模型必须只输出“正面”或“负面”，因此准确率和格式错误都能自动统计。旧的 GSM8K 结果文件仅是改版前的历史记录，不代表当前实验。
+
+复现：
 
 ```bash
 uv run python -m code.few_shot_prompting.experiment
 ```
 
-默认对 10 条独立测试文本分别运行零样本基线和 4-shot 处理组，共调用模型 20 次。测试集含 5 条正面和 5 条负面文本，演示与测试样本不重叠。结果会保存到 `code/few_shot_prompting/results/`。可用 `--limit 2` 做低成本冒烟测试，或用 `--trials 3` 重复实验。
+参考：[少样本提示](https://www.promptingguide.ai/zh/techniques/fewshot)
 
-## CoT、零样本 CoT 与 Auto-CoT 对比实验
+## 3. 思维链（Chain-of-Thought，CoT）
 
-实验参考 Prompt Engineering Guide 的[思维链提示说明](https://www.promptingguide.ai/zh/techniques/cot)，并纳入指南中的奇数求和与苹果数量案例。实验包含五个条件：
+### 原理
 
-1. `direct`：直接回答基线。
-2. `answer_only_few_shot`：只提供问题和答案的少样本基线。
-3. `manual_cot`：在相同少样本示例中加入人工推理链。
-4. `zero_shot_cot`：在直接回答提示后加入“让我们逐步思考”。
-5. `auto_cot`：自动聚类候选问题、选择代表问题，再由模型生成推理链作为演示。
+直接回答复杂题，像让学生只写最终答案；CoT 则让模型把问题拆成中间步骤再得到结论。中间步骤为后续计算提供上下文，减少模型“一步跳到答案”时漏条件的概率。
 
-预览提示词而不调用模型：
+常见做法有三种：
 
-```bash
-uv run python -m code.chain_of_thought_prompting.experiment --dry-run
+- **人工 CoT**：示例里由人写出正确推理步骤；
+- **零样本 CoT**：不提供示例，只加入“让我们逐步思考”；
+- **Auto-CoT**：自动挑选不同类型的问题，再让模型生成推理示例。
+
+### 有什么用？
+
+适合算术应用题、逻辑题、常识推理和需要分解的规划问题。简单分类或固定信息提取一般不需要 CoT，增加步骤只会消耗更多 token，还可能让模型越想越偏。
+
+### 最小模板
+
+```text
+请解决下面的问题。先列出已知条件，再分步骤计算，最后单独输出答案。
+问题：书店有3箱书，每箱8本，卖出5本后还剩多少本？
 ```
 
-运行完整实验：
+### 仓库实现与实验结果
+
+实现见 [`code/chain_of_thought_prompting/experiment.py`](code/chain_of_thought_prompting/experiment.py)，结果见 [`cot_comparison_20260817-163628.json`](code/chain_of_thought_prompting/results/cot_comparison_20260817-163628.json)。模型为 `qwen3-1.7b`，在 GSM8K 前 10 题上每题运行一次；生成 4 个 Auto-CoT 演示后，总调用数为 54。
+
+| 条件 | 正确数 | 准确率 |
+| --- | ---: | ---: |
+| 直接回答 | 5/10 | 50% |
+| 只有答案的少样本 | 6/10 | 60% |
+| 人工 CoT | 7/10 | 70% |
+| 零样本 CoT | 6/10 | 60% |
+| Auto-CoT | 5/10 | 50% |
+
+人工 CoT 比“只有答案的少样本”净增加 1 题；零样本 CoT 比直接回答净增加 1 题；Auto-CoT 与直接回答持平，且比人工 CoT 少 2 题。Auto-CoT 的 4 个自动演示自身全部答对，但没有转化为测试集提升。
+
+**怎么理解？** 这组数据支持“明确的正确推理范例可能有帮助”，但不支持“只要自动生成步骤就一定更好”。演示答对只说明演示题做对了，不代表演示覆盖了测试题需要的推理类型。样本仍然只有 10 题，结论只能算线索，不能算稳定规律。
+
+复现：
 
 ```bash
 uv run python -m code.chain_of_thought_prompting.experiment
 ```
 
-所有条件都要求将最终整数写在 `\boxed{}` 中，评测器会提取最后一个 boxed 值进行验证。默认设置会先生成4个 Auto-CoT 演示，再在 GSM8K 前100题上评测5个条件，共调用模型504次。可以先用 `--limit 2 --auto-clusters 2` 进行12次调用的低成本测试。结果包含各条件准确率、平均绝对误差、回答长度、Auto-CoT 演示正确率以及多组配对改善/退步统计，并保存在 `code/chain_of_thought_prompting/results/`。
+参考：[思维链提示](https://www.promptingguide.ai/zh/techniques/cot)
 
-## 思维树（ToT）与 CoT 对比实验
+## 4. 自我一致性（Self-Consistency）
 
-实验参考 Prompt Engineering Guide 的[思维树（ToT）](https://www.promptingguide.ai/zh/techniques/tot)：模型先生成多个中间思维、评估中间状态，再使用 BFS/beam search 保留有希望的分支。本实验使用页面中的典型 24 点任务，只比较两个条件：
+### 原理
 
-1. `cot`：单次逐步推理并构造表达式。
-2. `tot_bfs`：每层生成多个二元运算步骤、对每个子状态作 `sure/maybe/impossible` 评估，并保留评分最高的状态继续搜索。
+一道题只做一次，可能刚好走错路。自我一致性会用较高温度采样多条不同的 CoT 路径，再对最终答案做多数投票。它相信：错误路径可能五花八门，而正确答案更容易重复出现。
 
-最终答案由 Python 严格验算：必须恰好使用四个输入数字各一次、只使用允许的四则运算且结果为 24。结果 JSON 包含搜索轨迹、两组准确率、同题配对的 `improved/regressed`、准确率差异及 ToT 的额外调用次数，便于将效果与成本一起判断。
+它不是让模型检查自己，也不是比较推理文字是否相同；核心是“独立多次作答 + 对最终答案投票”。
 
-```bash
-# 仅预览提示词
-uv run python -m code.tree_of_thought_prompting.experiment --dry-run
+### 有什么用？
 
-# 低成本试运行
-uv run python -m code.tree_of_thought_prompting.experiment --limit 1
+适合答案可以明确比较的推理任务，例如选择题、整数题或标准化短答案。开放式写作很难定义怎样才算“同一个答案”。它的代价也很直接：采样 5 条路径，模型调用量通常接近 5 倍。
 
-# 完整的 10 题实验
-uv run python -m code.tree_of_thought_prompting.experiment
-```
+### 仓库实现与实验结果
 
-可使用 `--branching-factor`、`--beam-width` 消融 ToT 搜索宽度。结果保存到 `code/tree_of_thought_prompting/results/`。
+实现见 [`code/self_consistency_prompting/experiment.py`](code/self_consistency_prompting/experiment.py)，结果见 [`self_consistency_20260817-170125.json`](code/self_consistency_prompting/results/self_consistency_20260817-170125.json)。模型为 `qwen3-1.7b`，共 20 题；基线每题调用 1 次，自我一致性每题采样 5 次，总调用数 120。
 
-## 自我一致性实验
+| 条件 | 正确数 | 准确率 |
+| --- | ---: | ---: |
+| 单次 CoT | 10/20 | 50% |
+| 5 路自我一致性 | 11/20 | 55% |
 
-实验参考 Prompt Engineering Guide 的[自我一致性说明](https://www.promptingguide.ai/zh/techniques/consistency)。它对同一少样本 CoT 提示采样多条推理路径，再对每条路径最后的 `\boxed{}` 整数答案进行多数投票。实验比较单次 CoT（默认 temperature=0）与5条路径的自我一致性（默认 temperature=0.7），并记录投票分歧、平局和无效答案。
+100 条采样路径都能解析，平均多数答案占比为 90%，出现 1 次平票。配对比较中 1 题由错变对、0 题由对变错。
+
+**怎么理解？** 本次实验用约 6 倍的总调用量换来 1 道题的提升。更值得注意的是，9 道题上五条路径会一致地投给错误答案；投票只能减少随机错误，不能修复模型稳定存在的误解。例如模型如果每次都漏掉同一个条件，五次投票仍然会错。
+
+复现：
 
 ```bash
 uv run python -m code.self_consistency_prompting.experiment
 ```
 
-默认会进行600次调用（100题 × 1次单次 CoT + 5次采样 CoT）。先预览或做低成本测试：
+参考：[自我一致性](https://www.promptingguide.ai/zh/techniques/consistency)
 
-```bash
-uv run python -m code.self_consistency_prompting.experiment --dry-run
-uv run python -m code.self_consistency_prompting.experiment --limit 2 --paths 3
+## 5. 生成知识提示（Generated Knowledge Prompting）
+
+### 原理
+
+这项技术让模型分两步工作：第一步先生成与问题有关的事实、规则或实体关系；第二步把这些“临时知识笔记”和原问题一起交给模型作答。
+
+大白话说，就是先问“做这道题要知道什么”，再问“根据这些知识，答案是什么”。显式写出来的知识更容易被第二步利用。
+
+### 有什么用？
+
+适合常识判断、事实问答和需要唤起背景知识的任务。但模型生成的知识可能本身就是错的；错误知识会让最终答案更加自信地出错。高风险或要求最新事实的场景应优先使用有来源的 RAG，而不是让模型凭记忆生成知识。
+
+### 最小流程
+
+```text
+第一步：列出回答“高尔夫球比赛中得分越高越好吗”所需的两条规则。
+第二步：只根据上述规则回答问题，并说明结论。
 ```
 
-运行不调用真实模型的单元测试：
+### 仓库实现
+
+[`code/knowledge_prompting/experiment.py`](code/knowledge_prompting/experiment.py)在本地 10 条事实问答上比较直接回答与“生成两条知识后回答”。仓库目前没有对应结果文件，因此只能说明实现，不能报告效果。
+
+复现：
+
+```bash
+uv run python -m code.knowledge_prompting.experiment
+```
+
+参考：[生成知识提示](https://www.promptingguide.ai/zh/techniques/knowledge)
+
+## 6. 链式提示（Prompt Chaining）
+
+### 原理
+
+链式提示把一个大任务拆成多个小任务，前一步输出成为后一步输入。它像流水线：先抽取资料，再核对资料，再写答案，最后检查格式。每个环节只做一件相对简单的事。
+
+CoT 通常是在一次回答内部展示推理步骤；提示链则是应用程序真正发起多次模型调用，中间还可以加入代码、人工审核或规则检查。
+
+### 有什么用？
+
+适合长文档问答、报告生成、内容审核、数据抽取后再写作，以及任何一步提示难以稳定完成的复杂工作流。它还便于定位故障：如果最终答案有问题，可以分别检查“检索错了、抽取错了，还是写作错了”。
+
+### 最小流程
+
+```text
+步骤1：从文档中抽取与问题直接相关的原文和位置。
+步骤2：只根据步骤1的材料回答问题。
+步骤3：检查答案中的每个事实能否在材料中找到依据。
+```
+
+代价是延迟和调用次数增加，而且前一步错误会传播到后一步。应为每个中间输出定义固定格式和校验规则。
+
+参考：[链式提示](https://www.promptingguide.ai/zh/techniques/prompt_chaining)
+
+## 7. 思维树（Tree of Thoughts，ToT）
+
+### 原理
+
+CoT 通常沿一条路一直推下去；ToT 会在每一步生成多个候选思路，评价哪些“肯定可行、可能可行、不可能”，只保留有希望的分支继续搜索，必要时回退。它把模型的“提出想法”和“评价想法”与广度优先、深度优先或束搜索结合起来。
+
+### 有什么用？
+
+适合 24 点、规划、谜题、创意搜索等存在多条路线、早期选择会影响最终结果的任务。普通问答和简单计算通常不值得使用，因为分支数会让成本迅速膨胀。
+
+### 仓库实现与实验结果
+
+[`code/tree_of_thought_prompting/experiment.py`](code/tree_of_thought_prompting/experiment.py)在 24 点任务上比较单次 CoT 与 ToT/BFS。结果文件为 [`tot_24_20260817-165546.json`](code/tree_of_thought_prompting/results/tot_24_20260817-165546.json)。模型是 `qwen3-14b-awq`，只测了 3 题；ToT 每步要求 5 个候选、最多保留 10 个状态、搜索深度为 3。
+
+| 程序记录的条件 | 正确数 | 准确率 | 模型调用数 |
+| --- | ---: | ---: | ---: |
+| 单次 CoT | 0/3 | 0% | 3 |
+| ToT/BFS | 1/3 | 33.3% | 233 |
+
+表面上 ToT 提升 33.3 个百分点，但多用了 230 次调用。更关键的是，**这组对比存在评测器缺陷，不能用来证明 ToT 更好**：人工查看原始输出可发现，CoT 三题都给出了数学上有效的表达式，例如 `6 / (1 - 3/4)`；校验器却无法处理 Unicode `×`，并把 `3/4` 当成一个整体后从数字计数中排除，于是将正确答案记为错误。这里测到的主要是“输出能否通过解析器”，不是 CoT 的真实解题能力。
+
+这也说明实验工程的一条重要原则：先人工抽查原始回答，确认评测器没有系统性误判，再解读准确率。修复解析器并扩大题量后，才适合重新比较 ToT 的收益和成本。
+
+参考：[思维树](https://www.promptingguide.ai/zh/techniques/tot)
+
+## 8. 检索增强生成（Retrieval-Augmented Generation，RAG）
+
+### 原理
+
+RAG 是“先从外部资料库找相关内容，再让模型根据找到的内容回答”。语言模型参数中的知识像一本出版后不再更新的书；检索系统则像随时能查的资料柜。
+
+典型流程是：文档切块 → 建立索引 → 根据问题检索相关片段 → 把片段放进提示 → 生成答案并附来源。
+
+### 有什么用？
+
+适合公司内部文档问答、产品手册、法规、最新资料和需要引用来源的任务。更新知识库通常比重新训练模型便宜，也更容易追踪答案依据。
+
+RAG 并不自动等于“不会幻觉”。检索可能找错、漏找，文档可能过期，模型也可能无视证据。可靠系统应要求引用、检测证据是否覆盖答案，并在资料不足时明确说“不知道”。
+
+参考：[检索增强生成](https://www.promptingguide.ai/zh/techniques/rag)
+
+## 9. 自动推理并使用工具（ART）
+
+### 原理
+
+ART（Automatic Reasoning and Tool-use）希望减少手工编排：面对新任务，系统先从任务库中挑出相似的“推理 + 工具调用”示范；模型据此自动拆分任务，在需要工具时暂停生成；程序执行工具，把结果放回上下文，再继续推理。
+
+### 有什么用？
+
+适合计算器、搜索、代码执行等工具混合的多步任务，尤其是任务种类很多、无法为每种任务单独手写流程时。它与 ReAct 都会交替推理和用工具；ART 更强调从任务库自动选择示范和自动生成解决程序。
+
+风险来自错误工具选择、不安全参数和工具返回的脏数据。实际系统需要参数校验、权限控制、超时、调用预算和失败回退。
+
+参考：[ART](https://www.promptingguide.ai/zh/techniques/art)
+
+## 10. 自动提示工程师（Automatic Prompt Engineer，APE）
+
+### 原理
+
+APE 把“写提示词”也当成一个可以搜索和评分的问题：
+
+1. 给推理模型少量输入/输出示例，让它生成多条候选指令；
+2. 让目标模型分别执行这些候选指令；
+3. 在独立选择集上打分；
+4. 选出分数最高的指令，再到没有参与选择的测试集上评估。
+
+它像举办提示词海选，而不是只相信人凭感觉写出的第一版。
+
+### 有什么用？
+
+适合任务可自动评分、有足够验证数据、候选提示很多的场景。没有可靠评分标准时，APE 只会优化一个错误指标；如果在测试集上挑提示，还会造成数据泄漏。
+
+### 仓库实现与实验结果
+
+实现见 [`code/automatic_prompt_engineer/experiment.py`](code/automatic_prompt_engineer/experiment.py)，结果见 [`ape_20260817-163649.json`](code/automatic_prompt_engineer/results/ape_20260817-163649.json)。实验使用 `qwen3-1.7b` 同时生成和执行指令：4 个生成示例、16 个候选选择题、4 个最终留出题，共调用 137 次。
+
+| 最终留出集条件 | 正确数 | 准确率 | 无法解析 |
+| --- | ---: | ---: | ---: |
+| 固定人工基线 | 2/4 | 50% | 1 |
+| APE 选中项 | 3/4 | 75% | 0 |
+
+选择阶段 8 个候选的最高准确率为 81.25%（13/16）。但选中的文本是“最后，确保每条指令的格式正确……”这类元说明，而不是一条正常的解题指令。
+
+**怎么理解？** 25 个百分点的表面提升没有足够可信度。生成模型输出了 `<think>` 思考和不符合格式的内容，候选解析器又逐行接收普通文字，导致“候选污染”；最终测试也只有 4 题，差 1 题就是 25 个百分点。正确的后续做法是强制生成结构化 JSON、过滤思考块、人工抽查候选，并扩大留出集。这个结果很好地展示了 APE 的原理，也很好地展示了自动优化系统会怎样钻评测和解析流程的空子。
+
+参考：[自动提示工程师](https://www.promptingguide.ai/zh/techniques/ape)
+
+## 11. Active-Prompt
+
+### 原理
+
+人工写 CoT 示例很贵，所以 Active-Prompt 不随机挑题标注，而是先让模型对候选问题各答多次。答案越不一致，说明模型越没把握。系统挑出这些最不确定的问题，请人写正确推理，再把它们作为少样本示例。
+
+它像老师优先讲全班最容易错的题，把有限教学时间花在最有价值的地方。
+
+### 有什么用？
+
+适合有大量未标注问题、人工标注预算有限的任务。不一致度只是“不确定”的替代指标：模型可能五次都自信地错，也可能用不同说法得到同一个正确答案，因此仍需设计合理的答案归一化和抽样策略。
+
+### 仓库实现
+
+[`code/active_prompting/experiment.py`](code/active_prompting/experiment.py)实现两个阶段：`collect` 对每题采样并按 `1 - 众数占比` 排序，导出人工标注任务；`infer` 读取人工 CoT 标注，在排除已标注题后的样本上评测。仓库目前没有完成标注后的结果文件。
+
+```bash
+uv run python -m code.active_prompting.experiment collect --limit 20 --paths 5 --annotation-budget 4
+# 填写导出 JSON 中的 reasoning 后，再运行 infer
+```
+
+参考：[Active-Prompt](https://www.promptingguide.ai/zh/techniques/activeprompt)
+
+## 12. 方向性刺激提示（Directional Stimulus Prompting）
+
+### 原理
+
+方向性刺激是给主模型一小段“重点提示”，引导它关注某些词、事实或角度。原始方法使用一个较小的策略模型，根据输入自动生成这些刺激，再让冻结的主模型完成任务。
+
+大白话说，主模型负责写文章，小模型先递一张便签：“务必提到营收增长、风险和现金流，不要展开人事变化。”
+
+### 有什么用？
+
+主要用于可控摘要和有明确关注点的生成任务。它能在不微调大模型的情况下改变输出重点。风险是便签本身遗漏关键信息或带入偏见；对简单任务，人工列出要点往往已经够用。
+
+参考：[方向性刺激提示](https://www.promptingguide.ai/zh/techniques/dsp)
+
+## 13. 程序辅助语言模型（Program-Aided Language Models，PAL）
+
+### 原理
+
+PAL 让模型负责理解题意并生成程序，让 Python 等解释器负责真正计算。CoT 用自然语言算数，容易在长计算中出错；PAL 把精确运算交给擅长运算的工具。
+
+```text
+自然语言问题 → 模型生成受限代码 → 安全执行环境运行 → 返回结果
+```
+
+### 有什么用？
+
+适合日期计算、算术、表格处理、单位换算和符号操作。模型仍可能写错公式，但至少程序的执行是确定的、可测试的。
+
+绝不能直接在生产机器上 `exec` 任意模型输出。应使用 AST 白名单、沙箱、资源限制和允许调用的函数列表，禁止文件、网络、进程和系统命令访问。
+
+参考：[PAL](https://www.promptingguide.ai/zh/techniques/pal)
+
+## 14. ReAct（Reason + Act）
+
+### 原理
+
+ReAct 让模型循环执行三件事：
+
+```text
+Thought：我现在知道什么、下一步缺什么？
+Action：调用搜索、计算器等工具。
+Observation：工具返回了什么？
+```
+
+然后模型根据新观察继续思考，直到给出 `Finish[答案]`。推理决定查什么，外部信息又会修正下一步推理。
+
+### 有什么用？
+
+适合多跳问答、需要最新信息的查询和智能体任务。它比纯 CoT 更能接触外部世界，也比盲目调用工具更有计划。但检索质量差时，ReAct 可能被无关结果带偏；循环还可能失控，所以应限制步数、工具权限和总成本。
+
+### 仓库实现
+
+[`code/react_prompting/experiment.py`](code/react_prompting/experiment.py)实现了 `Thought/Action/Observation` 循环、可注入的本地搜索库和基于 AST 白名单的计算器。仓库没有批量实验结果。
+
+```bash
+uv run python -m code.react_prompting.experiment --dry-run
+uv run python -m code.react_prompting.experiment --question "高平原的海拔范围是多少？"
+```
+
+参考：[ReAct](https://www.promptingguide.ai/zh/techniques/react)
+
+## 15. Reflexion（自我反思）
+
+### 原理
+
+Reflexion 不是修改模型参数，而是把失败经验写成文字记忆，放进下一次尝试的上下文。基本角色有：
+
+- **Actor**：执行任务；
+- **Evaluator**：用标准答案、单元测试、规则或另一个模型评分；
+- **Self-Reflection**：根据失败轨迹和反馈写出具体改进建议；
+- **Memory**：保存这些建议，供下一轮 Actor 使用。
+
+这像做错题后写一句“我把年龄差误当成年龄比例，下次应先固定年龄差”，下一次做题先看错题本。
+
+### 有什么用？
+
+适合可以多次尝试并获得明确反馈的代码、游戏、规划和智能体任务。没有可靠反馈时，反思模型可能为错误答案编造看似合理的解释；记忆太长或互相冲突也会拖累后续尝试。
+
+### 仓库实现
+
+[`code/reflexion_prompting/experiment.py`](code/reflexion_prompting/experiment.py)实现 Actor、精确答案 Evaluator、自我反思和容量有限的滑动记忆。仓库没有批量结果。
+
+```bash
+uv run python -m code.reflexion_prompting.experiment --dry-run
+uv run python -m code.reflexion_prompting.experiment
+```
+
+参考：[Reflexion](https://www.promptingguide.ai/zh/techniques/reflexion)
+
+## 16. 多模态思维链（Multimodal CoT）
+
+### 原理
+
+传统 CoT 只处理文字；多模态 CoT 同时利用图片和文字。经典的两阶段形式先根据图文信息生成推理依据，再利用这些依据推断答案。
+
+例如一道几何题不能只读题干，还要先从图中识别长度、角度和位置关系，再逐步计算。
+
+### 有什么用？
+
+适合图表理解、科学题、视觉问答、截图分析和医学影像辅助等任务。主要风险是第一阶段“看错图”；后面的推理即使逻辑正确，也只是在错误视觉事实上继续推导。需要单独评估视觉识别和推理两个环节。
+
+参考：[多模态思维链](https://www.promptingguide.ai/zh/techniques/multimodalcot)
+
+## 17. 基于图的提示（GraphPrompts）
+
+### 原理
+
+这里的“图”不是图片，而是由节点和边组成的关系网络，例如社交网络、分子、引用网络和知识图谱。GraphPrompt 类方法会把任务提示与图表示结合，让一个预训练图模型适配不同下游任务；可以把它理解为“图机器学习里的提示学习”。
+
+### 有什么用？
+
+适合节点分类、图分类和链接预测，例如判断账号类型、预测两个实体是否有关联、判断分子性质。它与给聊天模型写自然语言提示并不完全相同，往往涉及图神经网络、可学习提示向量或图结构变换。
+
+指南当前页面只有简短介绍，因此初学者只需先记住：当输入的核心是“谁和谁相连”，普通线性文本可能丢失结构，图提示专门保留并利用这种关系。
+
+参考：[GraphPrompts](https://www.promptingguide.ai/zh/techniques/graph)
+
+## 18. Meta-Prompting（元提示）
+
+### 原理
+
+Meta-Prompting 不是提供某一道题的具体例子，而是给出一套可复用的“解题结构”：先识别任务类型，再拆分子问题，选择合适方法，检查约束，最后按规定格式回答。它关注“怎样组织思考”，而不是“应该记住哪些示例内容”。
+
+一个简单的元提示可以是：
+
+```text
+你是问题求解器。
+1. 先识别问题类型和目标。
+2. 列出约束与已知条件。
+3. 将问题拆成可验证的子步骤。
+4. 完成后检查每个约束是否满足。
+5. 最后只按用户要求的格式给出答案。
+```
+
+### 有什么用？
+
+适合希望跨多个同类任务复用统一流程、但不想塞入大量示例的场景。它与 APE 的区别是：Meta-Prompting 提供或生成“组织问题求解的上层框架”；APE 则批量生成候选任务指令并通过评分搜索最优项。元提示写得太空泛时，只会增加文字而不增加能力，所以最好把步骤写成可执行、可检查的动作。
+
+提示工程指南的该中文页面目前无法正常打开；这里依据目录项和 Meta-Prompting 论文项目的定义作入门说明。延伸阅读：[Meta Prompting for AI Systems](https://github.com/meta-prompting/meta-prompting)
+
+---
+
+## 这些技术该怎么选？
+
+可以按下面的顺序逐级增加复杂度：
+
+1. **先用零样本**：把任务、输入和输出格式写清楚。
+2. **模型不懂格式或标签时，用少样本**：示例要与真实任务相似。
+3. **需要多步推理时，用 CoT**：优先提供正确、简短的人工推理示例。
+4. **单次推理偶然性大时，用自我一致性**：先确认多次调用的收益大于成本。
+5. **需要私有或最新知识时，用 RAG**：要求答案引用检索证据。
+6. **需要精确计算时，用 PAL 或计算器**：模型负责建模，程序负责计算。
+7. **需要边查边决定时，用 ReAct/ART**：同时做好工具权限和循环控制。
+8. **任务能拆成固定阶段时，用提示链**：为中间结果加结构和校验。
+9. **存在大量候选路线时，用 ToT**：只在搜索收益值得高成本时使用。
+10. **人工标注或写提示太贵时，用 Active-Prompt/APE**：必须保留独立验证集并审计自动生成内容。
+11. **任务可以反复试错时，用 Reflexion**：Evaluator 的可靠性比“反思写得好看”更重要。
+
+技术可以组合，例如 `RAG + ReAct`、`PAL + CoT`、`CoT + 自我一致性`。但组合越多，成本、延迟和故障点越多。每加一项都应通过消融实验回答：“它到底带来了多少净收益？”
+
+## 怎样读本仓库的实验结果？
+
+### 1. 准确率差不等于稳定结论
+
+10 题中差 1 题就是 10 个百分点，4 题中差 1 题就是 25 个百分点。小样本特别容易让结果看起来大起大落。至少应扩大样本、多次重复，并报告置信区间。
+
+### 2. 要做配对比较
+
+同一道题在基线和处理组中分别发生什么，比只看两个总准确率更有信息。`improved` 表示由错变对，`regressed` 表示由对变错，二者相减才是净改善。
+
+### 3. 原始回答和评测器都要审计
+
+ToT 实验说明，正确答案可能因解析器不认识 Unicode 符号而被判错；APE 实验说明，生成器不守格式会污染候选集合。自动评分不是天然客观，它本身也是需要测试的软件。
+
+### 4. 同时记录成本和速度
+
+自我一致性增加多条采样，ToT 增加大量分支。准确率只提升一点时，调用量、token、延迟和费用可能已经增加几十倍。
+
+### 5. 不要把一个模型上的结果推广到所有模型
+
+提示技术的效果依赖模型能力、模型版本、温度、语言、任务分布和提示格式。本仓库现有结果主要来自 `qwen3-1.7b`，ToT 来自 `qwen3-14b-awq`，它们是这些具体设置下的观察，不是普遍定律。
+
+## 运行仓库实验
+
+在项目根目录的 `.env` 中配置兼容 OpenAI API 的模型：
+
+```dotenv
+LLM_MODEL=模型名
+LLM_BASE_URL=接口地址
+LLM_API_KEY=密钥
+```
+
+先运行不访问真实模型的单元测试：
 
 ```bash
 uv run python -m unittest discover -s code -p 'test_*.py'
 ```
 
-## 生成知识提示实验
-
-实验参考 Prompt Engineering Guide 的[生成知识提示](https://www.promptingguide.ai/zh/techniques/knowledge)：评测集为本地固定的 10 条事实知识问答样本（`code/data/knowledge_qa_10.json`），覆盖地理、历史、科学、文学、艺术与人体知识。处理组先生成两条相关事实或实体关系，再把它们与原题一起交给模型作答；直接回答组使用相同问题但不提供知识。答案以大小写、标点和冠词无关的短文本精确匹配评测，并支持数据中声明的同义答案。
-
-```bash
-uv run python -m code.knowledge_prompting.experiment --dry-run
-uv run python -m code.knowledge_prompting.experiment
-```
-
-默认运行 30 次模型调用（10 条样本 × 直接回答 1 次 + 生成知识与整合回答各 1 次），并保存原始回答、生成知识、标签、准确率变化以及逐样本配对改善/退步到 `code/knowledge_prompting/results/`。可用 `--limit 2` 做低成本检查，如需降低偶然性可增加 `--trials 3`。
-
-## Active-Prompt 实验
-
-实验参考 Prompt Engineering Guide 的 [Active-Prompt](https://www.promptingguide.ai/zh/techniques/activeprompt)。它先对候选题采样多个答案，以 `1 - 众数答案占比` 作为不一致度，选择最不确定的问题交给人类编写 CoT 推理；完成的人工标注随后成为少样本示例。
-
-```bash
-# 采样前 20 道候选题（每题 5 条路径），导出 4 条人工标注任务
-uv run python -m code.active_prompting.experiment collect --limit 20 --paths 5 --annotation-budget 4
-
-# 在导出的 JSON 中填写每条 reasoning 后，用它们评测剩余 GSM8K 样本
-uv run python -m code.active_prompting.experiment infer --annotations code/active_prompting/results/active_prompt_annotations_*.json
-```
-
-使用 `collect --dry-run` 或 `infer --annotations ... --dry-run` 可分别预览两个阶段的提示词。推理阶段会自动从 GSM8K 前 100 条中排除被人工标注过的题，避免把示例直接泄漏到评测结果中。
-
-## 自动提示工程师（APE）实验
-
-实验参考 Prompt Engineering Guide 的[自动提示工程师（APE）](https://www.promptingguide.ai/zh/techniques/ape)：推理模型从少量输入/输出示例合成多条任务指令；目标模型在独立的选择集上执行每条候选指令并以精确匹配准确率打分；最高分指令最后在未参与生成或选择的留出集上，与固定直接解题基线比较。
-
-```bash
-# 只预览用于生成候选指令的元提示词
-uv run python -m code.automatic_prompt_engineer.experiment --dry-run
-
-# 低成本试运行：4 个演示、2 个选择题、2 条候选、2 个留出测试题
-uv run python -m code.automatic_prompt_engineer.experiment --limit 8 --selection 2 --candidates 2
-
-# 默认完整实验
-uv run python -m code.automatic_prompt_engineer.experiment
-```
-
-默认按前 4 条 / 后续 16 条 / 剩余 80 条将 GSM8K 前 100 条分为指令生成示例、候选选择集和最终留出集。最多调用 `1 + 8 × 16 + 2 × 80 = 289` 次模型；结果含生成的候选指令、每个候选的选择集记录、选中指令、两种最终提示的原始回答与准确率差，保存到 `code/automatic_prompt_engineer/results/`。
+建议先用各实验的 `--dry-run` 查看真实提示，或用 `--limit 2` 做低成本冒烟测试，再运行完整实验。不要把 API 密钥写进代码或提交到版本控制。
